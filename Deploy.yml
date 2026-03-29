@@ -1,0 +1,103 @@
+name: Antam Monitor Client - Deployment
+
+on:
+push:
+tags: [v*]
+branches: [main]
+
+env:
+DOCKER_IMAGE: ghcr.io/${{ github.repository_owner }}/antam-monitor-client
+SSH_HOST: ${{ secrets.SSH_HOST }}
+SSH_USER: ${{ secrets.SSH_USER }}
+SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+build-and-push:
+name: Build & Push Docker Image
+runs-on: ubuntu-latest
+environment: Production
+permissions:
+contents: read
+packages: write
+
+steps:
+- name: Checkout code
+uses: actions/checkout@v4
+with:
+fetch-depth: 0
+
+- name: Get image version
+id: get-version
+run: |
+VERSION=$(jq -r .version client/package.json)
+echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+- name: Login to GitHub Container Registry
+uses: docker/login-action@v3
+with:
+registry: ghcr.io
+username: ${{ github.actor }}
+password: ${{ secrets.PAT_TOKEN }}
+
+- name: Build and push Docker image
+uses: docker/build-push-action@v5
+with:
+context: ./client
+build-args: |
+VITE_API_URL=${{ vars.VITE_API_URL }}
+push: true
+tags: |
+${{ env.DOCKER_IMAGE }}:${{ steps.get-version.outputs.version }}
+${{ env.DOCKER_IMAGE }}:latest
+
+deploy:
+name: Deploy to Server
+needs: build-and-push
+runs-on: ubuntu-latest
+environment: Production
+
+steps:
+- name: Checkout code
+uses: actions/checkout@v4
+
+- name: Setup SSH
+uses: webfactory/ssh-agent@v0.7.0
+with:
+ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+- name: Get version
+id: get-version
+run: |
+VERSION=$(jq -r .version client/package.json)
+echo "FULL_IMAGE=${{ env.DOCKER_IMAGE }}:$VERSION" >> "$GITHUB_ENV"
+
+- name: Deploy via SSH
+run: |
+ssh -p ${{ secrets.SSH_PORT }} -o StrictHostKeyChecking=no \
+    ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} /bin/bash <<'EOF'
+echo '${{ secrets.PAT_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+echo "📦 Pulling image: ${{ env.FULL_IMAGE }}"
+
+if ! docker pull ${{ env.FULL_IMAGE }}; then
+echo '⚠️ Failed to pull versioned image, fallback to latest'
+docker pull ${{ env.DOCKER_IMAGE }}:latest
+FULL_IMAGE=${{ env.DOCKER_IMAGE }}:latest
+fi
+
+if docker container inspect antam-monitor-client >/dev/null 2>&1; then
+echo "🛑 Stopping and removing existing container..."
+docker container stop antam-monitor-client
+docker container rm antam-monitor-client
+else
+echo "✅ No existing container found."
+fi
+
+docker run -d \
+    --name antam-monitor-client \
+    -p ${{ vars.CLIENT_PORT || '80' }}:80 \
+    --restart unless-stopped \
+    --init \
+    ${{ env.FULL_IMAGE }}
+EOF
