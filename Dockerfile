@@ -1,19 +1,28 @@
-FROM node:22-alpine AS build
+FROM node:22-alpine AS builder
+
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+
+RUN npm install -g npm
+
+COPY package-lock.json ./
+COPY package.json ./
+RUN npm install --frozen-lockfile
+
 COPY . .
-ARG VITE_API_URL=http://localhost:3000
-ENV VITE_API_URL=$VITE_API_URL
+
+ARG VITE_API_URL
+RUN echo "App Name: $VITE_API_URL"
+
 RUN npm run build
 
-FROM nginx:alpine
-RUN apk add --no-cache curl
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+FROM nginx:stable-alpine
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:80/ || exit 1
+RUN rm /etc/nginx/conf.d/default.conf
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
+
 CMD ["nginx", "-g", "daemon off;"]
