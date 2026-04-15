@@ -1,0 +1,74 @@
+name: Scrap Client
+
+on:
+  push:
+    tags: [v*]
+    branches: [main]
+
+env:
+  NODE_VERSION: 22.14.0
+  DOCKER_IMAGE: ghcr.io/${{ github.repository_owner }}/scrap-client
+  
+jobs:
+  build-test:
+    name: Build Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install npm
+        run: npm install -g npm
+
+      - name: Install dependencies
+        run: npm install --frozen-lockfile
+
+      - name: Build frontend
+        run: npm build
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+  dockerizing:
+    name: Dockerizing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get image version
+        id: get-version
+        run: |
+          VERSION=$(jq -r .version package.json)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.PAT_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ steps.get-version.outputs.version }}
+            ${{ env.DOCKER_IMAGE }}:latest
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL }}
