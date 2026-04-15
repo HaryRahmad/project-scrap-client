@@ -2,8 +2,6 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN npm install -g npm
-
 COPY package-lock.json ./
 COPY package.json ./
 RUN npm install --frozen-lockfile
